@@ -3,9 +3,16 @@
 import { eq } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { sites } from '@/db/schema';
-import { loadAllRanges, type AllRanges } from '@/lib/site-stats';
+import {
+  loadAllRanges,
+  safeTimezone,
+  type AllRanges,
+} from '@/lib/site-stats';
 
-export async function refreshSiteStats(siteId: string): Promise<AllRanges> {
+export async function refreshSiteStats(
+  siteId: string,
+  timezone: string,
+): Promise<AllRanges> {
   const [exists] = await db
     .select({ id: sites.id })
     .from(sites)
@@ -14,5 +21,5 @@ export async function refreshSiteStats(siteId: string): Promise<AllRanges> {
   if (!exists) {
     throw new Error('Site not found');
   }
-  return loadAllRanges(siteId);
+  return loadAllRanges(siteId, safeTimezone(timezone));
 }

@@ -1,8 +1,9 @@
+import { headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 import { eq } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { sites } from '@/db/schema';
-import { loadAllRanges } from '@/lib/site-stats';
+import { loadAllRanges, safeTimezone } from '@/lib/site-stats';
 import { deleteSite } from '../../actions';
 import { Snippet } from './snippet';
 import { SiteStats } from './stats';
@@ -23,7 +24,9 @@ export default async function SitePage({ params }: PageProps) {
     .limit(1);
   if (!site) notFound();
 
-  const initial = await loadAllRanges(site.id);
+  const hdrs = await headers();
+  const initialTimezone = safeTimezone(hdrs.get('x-vercel-ip-timezone'));
+  const initial = await loadAllRanges(site.id, initialTimezone);
 
   return (
     <main className="px-6 py-10 max-w-5xl w-full mx-auto flex flex-col gap-10">
@@ -32,6 +35,7 @@ export default async function SitePage({ params }: PageProps) {
         siteName={site.name ?? site.domain}
         siteDomain={site.domain}
         initial={initial}
+        initialTimezone={initialTimezone}
       />
 
       <Snippet trackingId={site.trackingId} />

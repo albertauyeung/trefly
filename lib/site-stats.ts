@@ -39,11 +39,20 @@ export interface RangeData {
 
 export type AllRanges = Record<Range, RangeData>;
 
+const TZ_RE = /^[A-Za-z_]+(?:\/[A-Za-z0-9_+\-]+){0,2}$|^UTC$/;
+
+export function safeTimezone(tz: string | null | undefined): string {
+  if (!tz) return 'UTC';
+  return TZ_RE.test(tz) ? tz : 'UTC';
+}
+
 export async function loadRange(
   siteId: string,
   range: Range,
+  timezone: string = 'UTC',
 ): Promise<RangeData> {
   const { hours, bucket } = RANGES[range];
+  const tz = safeTimezone(timezone);
   const since = new Date(Date.now() - hours * 3_600_000);
   const where = and(eq(events.siteId, siteId), gte(events.ts, since));
 
@@ -51,24 +60,28 @@ export async function loadRange(
     bucket === 'hour'
       ? db
           .select({
-            bucket: sql<string>`to_char(date_trunc('hour', ${events.ts}), 'YYYY-MM-DD HH24:00')`,
+            bucket: sql<string>`to_char(date_trunc('hour', ${events.ts} AT TIME ZONE ${tz}), 'YYYY-MM-DD HH24:00')`,
             pageviews: count(events.id),
             uniques: countDistinct(events.visitorHash),
           })
           .from(events)
           .where(where)
-          .groupBy(sql`date_trunc('hour', ${events.ts})`)
-          .orderBy(sql`date_trunc('hour', ${events.ts}) ASC`)
+          .groupBy(sql`date_trunc('hour', ${events.ts} AT TIME ZONE ${tz})`)
+          .orderBy(
+            sql`date_trunc('hour', ${events.ts} AT TIME ZONE ${tz}) ASC`,
+          )
       : db
           .select({
-            bucket: sql<string>`to_char(date_trunc('day', ${events.ts}), 'YYYY-MM-DD')`,
+            bucket: sql<string>`to_char(date_trunc('day', ${events.ts} AT TIME ZONE ${tz}), 'YYYY-MM-DD')`,
             pageviews: count(events.id),
             uniques: countDistinct(events.visitorHash),
           })
           .from(events)
           .where(where)
-          .groupBy(sql`date_trunc('day', ${events.ts})`)
-          .orderBy(sql`date_trunc('day', ${events.ts}) ASC`);
+          .groupBy(sql`date_trunc('day', ${events.ts} AT TIME ZONE ${tz})`)
+          .orderBy(
+            sql`date_trunc('day', ${events.ts} AT TIME ZONE ${tz}) ASC`,
+          );
 
   const [
     totalsRows,
@@ -151,9 +164,12 @@ export async function loadRange(
   };
 }
 
-export async function loadAllRanges(siteId: string): Promise<AllRanges> {
+export async function loadAllRanges(
+  siteId: string,
+  timezone: string = 'UTC',
+): Promise<AllRanges> {
   const results = await Promise.all(
-    RANGE_KEYS.map((r) => loadRange(siteId, r)),
+    RANGE_KEYS.map((r) => loadRange(siteId, r, timezone)),
   );
   return Object.fromEntries(
     RANGE_KEYS.map((r, i) => [r, results[i]]),

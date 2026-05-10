@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useEffect, useRef, useState, useTransition } from 'react';
 import {
   RANGE_KEYS,
   type AllRanges,
@@ -16,6 +16,15 @@ interface SiteStatsProps {
   siteName: string;
   siteDomain: string;
   initial: AllRanges;
+  initialTimezone: string;
+}
+
+function browserTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
 }
 
 export function SiteStats({
@@ -23,19 +32,32 @@ export function SiteStats({
   siteName,
   siteDomain,
   initial,
+  initialTimezone,
 }: SiteStatsProps) {
   const [data, setData] = useState<AllRanges>(initial);
   const [range, setRange] = useState<Range>('7d');
   const [refreshing, startRefresh] = useTransition();
+  const reconciledOnce = useRef(false);
 
   const view = data[range];
 
-  const handleRefresh = () => {
+  const refresh = (tz: string) => {
     startRefresh(async () => {
-      const fresh = await refreshSiteStats(siteId);
+      const fresh = await refreshSiteStats(siteId, tz);
       setData(fresh);
     });
   };
+
+  useEffect(() => {
+    if (reconciledOnce.current) return;
+    reconciledOnce.current = true;
+    const browserTz = browserTimezone();
+    if (browserTz !== initialTimezone) {
+      refresh(browserTz);
+    }
+  }, [initialTimezone]);
+
+  const handleRefresh = () => refresh(browserTimezone());
 
   return (
     <>
