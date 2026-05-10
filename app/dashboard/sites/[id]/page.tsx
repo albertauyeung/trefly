@@ -7,8 +7,14 @@ import { Snippet } from './snippet';
 
 export const dynamic = 'force-dynamic';
 
-const RANGE_DAYS = { '7d': 7, '30d': 30, '90d': 90 } as const;
-type Range = keyof typeof RANGE_DAYS;
+const RANGES = {
+  '24h': { hours: 24, bucket: 'hour' as const },
+  '7d': { hours: 7 * 24, bucket: 'day' as const },
+  '30d': { hours: 30 * 24, bucket: 'day' as const },
+  '90d': { hours: 90 * 24, bucket: 'day' as const },
+};
+type Range = keyof typeof RANGES;
+type Bucket = 'hour' | 'day';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -19,7 +25,9 @@ export default async function SitePage({ params, searchParams }: PageProps) {
   const { id } = await params;
   const { range: rangeRaw } = await searchParams;
   const range: Range =
-    rangeRaw === '30d' || rangeRaw === '90d' ? rangeRaw : '7d';
+    rangeRaw === '24h' || rangeRaw === '30d' || rangeRaw === '90d'
+      ? rangeRaw
+      : '7d';
 
   const [site] = await db
     .select()
@@ -28,8 +36,32 @@ export default async function SitePage({ params, searchParams }: PageProps) {
     .limit(1);
   if (!site) notFound();
 
-  const since = new Date(Date.now() - RANGE_DAYS[range] * 86_400_000);
+  const { hours, bucket } = RANGES[range];
+  const since = new Date(Date.now() - hours * 3_600_000);
   const where = and(eq(events.siteId, site.id), gte(events.ts, since));
+
+  const seriesQuery =
+    bucket === 'hour'
+      ? db
+          .select({
+            bucket: sql<string>`to_char(date_trunc('hour', ${events.ts}), 'YYYY-MM-DD HH24:00')`,
+            pageviews: count(events.id),
+            uniques: countDistinct(events.visitorHash),
+          })
+          .from(events)
+          .where(where)
+          .groupBy(sql`date_trunc('hour', ${events.ts})`)
+          .orderBy(sql`date_trunc('hour', ${events.ts}) ASC`)
+      : db
+          .select({
+            bucket: sql<string>`to_char(date_trunc('day', ${events.ts}), 'YYYY-MM-DD')`,
+            pageviews: count(events.id),
+            uniques: countDistinct(events.visitorHash),
+          })
+          .from(events)
+          .where(where)
+          .groupBy(sql`date_trunc('day', ${events.ts})`)
+          .orderBy(sql`date_trunc('day', ${events.ts}) ASC`);
 
   const [
     totalsRows,
@@ -38,7 +70,7 @@ export default async function SitePage({ params, searchParams }: PageProps) {
     topBrowsers,
     topCountries,
     topDevices,
-    dailySeries,
+    series,
   ] = await Promise.all([
     db
       .select({
@@ -81,16 +113,7 @@ export default async function SitePage({ params, searchParams }: PageProps) {
       .where(where)
       .groupBy(events.device)
       .orderBy(desc(count(events.id))),
-    db
-      .select({
-        day: sql<string>`to_char(date_trunc('day', ${events.ts}), 'YYYY-MM-DD')`,
-        pageviews: count(events.id),
-        uniques: countDistinct(events.visitorHash),
-      })
-      .from(events)
-      .where(where)
-      .groupBy(sql`date_trunc('day', ${events.ts})`)
-      .orderBy(sql`date_trunc('day', ${events.ts}) ASC`),
+    seriesQuery,
   ]);
 
   const totals = totalsRows[0];
@@ -118,18 +141,21 @@ export default async function SitePage({ params, searchParams }: PageProps) {
       <section className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <Stat label="Pageviews" value={totals?.pageviews ?? 0} />
         <Stat label="Unique visitors" value={totals?.uniques ?? 0} />
-        <Stat label="Days with data" value={dailySeries.length} />
         <Stat
-          label="Avg / day"
+          label={bucket === 'hour' ? 'Hours with data' : 'Days with data'}
+          value={series.length}
+        />
+        <Stat
+          label={bucket === 'hour' ? 'Avg / hour' : 'Avg / day'}
           value={
-            dailySeries.length === 0
+            series.length === 0
               ? 0
-              : Math.round((totals?.pageviews ?? 0) / dailySeries.length)
+              : Math.round((totals?.pageviews ?? 0) / series.length)
           }
         />
       </section>
 
-      <DailyBars series={dailySeries} />
+      <SeriesBars series={series} bucket={bucket} />
 
       <div className="grid sm:grid-cols-2 gap-6">
         <BarTable
@@ -195,7 +221,7 @@ function Stat({ label, value }: { label: string; value: number }) {
 }
 
 function RangeTabs({ current }: { current: Range }) {
-  const ranges: Range[] = ['7d', '30d', '90d'];
+  const ranges: Range[] = ['24h', '7d', '30d', '90d'];
   return (
     <nav className="flex gap-1 text-sm">
       {ranges.map((r) => (
@@ -262,19 +288,22 @@ function BarTable({
   );
 }
 
-function DailyBars({
+function SeriesBars({
   series,
+  bucket,
 }: {
-  series: { day: string; pageviews: number; uniques: number }[];
+  series: { bucket: string; pageviews: number; uniques: number }[];
+  bucket: Bucket;
 }) {
+  const heading = bucket === 'hour' ? 'Hourly pageviews' : 'Daily pageviews';
   if (series.length === 0) {
     return (
       <section>
         <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500 mb-2">
-          Daily pageviews
+          {heading}
         </h2>
         <p className="text-sm text-zinc-500">
-          No data yet. Once events start flowing, daily totals will show up here.
+          No data yet. Once events start flowing, totals will show up here.
         </p>
       </section>
     );
@@ -284,14 +313,14 @@ function DailyBars({
   return (
     <section>
       <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500 mb-3">
-        Daily pageviews
+        {heading}
       </h2>
       <div className="flex items-end gap-1 h-40">
         {series.map((s) => (
           <div
-            key={s.day}
+            key={s.bucket}
             className="flex-1 flex items-end h-full"
-            title={`${s.day}: ${s.pageviews.toLocaleString()} views, ${s.uniques.toLocaleString()} unique`}
+            title={`${s.bucket}: ${s.pageviews.toLocaleString()} views, ${s.uniques.toLocaleString()} unique`}
           >
             <div
               className="w-full bg-emerald-500 dark:bg-emerald-400 rounded-sm hover:bg-emerald-600 dark:hover:bg-emerald-300"
@@ -304,9 +333,9 @@ function DailyBars({
       </div>
       <div className="flex gap-1 mt-2 text-[10px] text-zinc-500">
         {series.map((s, i) => (
-          <span key={s.day} className="flex-1 text-center truncate">
+          <span key={s.bucket} className="flex-1 text-center truncate">
             {i % labelStride === 0 || i === series.length - 1
-              ? s.day.slice(5)
+              ? s.bucket.slice(-5)
               : ''}
           </span>
         ))}
