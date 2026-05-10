@@ -31,73 +31,84 @@ export default async function SitePage({ params, searchParams }: PageProps) {
   const since = new Date(Date.now() - RANGE_DAYS[range] * 86_400_000);
   const where = and(eq(events.siteId, site.id), gte(events.ts, since));
 
-  const [totals] = await db
-    .select({
-      pageviews: count(events.id),
-      uniques: countDistinct(events.visitorHash),
-    })
-    .from(events)
-    .where(where);
+  const [
+    totalsRows,
+    topPaths,
+    topReferrers,
+    topBrowsers,
+    topCountries,
+    topDevices,
+    dailySeries,
+  ] = await Promise.all([
+    db
+      .select({
+        pageviews: count(events.id),
+        uniques: countDistinct(events.visitorHash),
+      })
+      .from(events)
+      .where(where),
+    db
+      .select({ path: events.path, pageviews: count(events.id) })
+      .from(events)
+      .where(where)
+      .groupBy(events.path)
+      .orderBy(desc(count(events.id)))
+      .limit(10),
+    db
+      .select({ host: events.referrerHost, pageviews: count(events.id) })
+      .from(events)
+      .where(where)
+      .groupBy(events.referrerHost)
+      .orderBy(desc(count(events.id)))
+      .limit(10),
+    db
+      .select({ browser: events.browser, pageviews: count(events.id) })
+      .from(events)
+      .where(where)
+      .groupBy(events.browser)
+      .orderBy(desc(count(events.id)))
+      .limit(8),
+    db
+      .select({ country: events.country, pageviews: count(events.id) })
+      .from(events)
+      .where(where)
+      .groupBy(events.country)
+      .orderBy(desc(count(events.id)))
+      .limit(10),
+    db
+      .select({ device: events.device, pageviews: count(events.id) })
+      .from(events)
+      .where(where)
+      .groupBy(events.device)
+      .orderBy(desc(count(events.id))),
+    db
+      .select({
+        day: sql<string>`to_char(date_trunc('day', ${events.ts}), 'YYYY-MM-DD')`,
+        pageviews: count(events.id),
+        uniques: countDistinct(events.visitorHash),
+      })
+      .from(events)
+      .where(where)
+      .groupBy(sql`date_trunc('day', ${events.ts})`)
+      .orderBy(sql`date_trunc('day', ${events.ts}) ASC`),
+  ]);
 
-  const topPaths = await db
-    .select({ path: events.path, pageviews: count(events.id) })
-    .from(events)
-    .where(where)
-    .groupBy(events.path)
-    .orderBy(desc(count(events.id)))
-    .limit(10);
-
-  const topReferrers = await db
-    .select({
-      host: events.referrerHost,
-      pageviews: count(events.id),
-    })
-    .from(events)
-    .where(where)
-    .groupBy(events.referrerHost)
-    .orderBy(desc(count(events.id)))
-    .limit(10);
-
-  const topBrowsers = await db
-    .select({ browser: events.browser, pageviews: count(events.id) })
-    .from(events)
-    .where(where)
-    .groupBy(events.browser)
-    .orderBy(desc(count(events.id)))
-    .limit(8);
-
-  const topCountries = await db
-    .select({ country: events.country, pageviews: count(events.id) })
-    .from(events)
-    .where(where)
-    .groupBy(events.country)
-    .orderBy(desc(count(events.id)))
-    .limit(10);
-
-  const topDevices = await db
-    .select({ device: events.device, pageviews: count(events.id) })
-    .from(events)
-    .where(where)
-    .groupBy(events.device)
-    .orderBy(desc(count(events.id)));
-
-  const dailySeries = await db
-    .select({
-      day: sql<string>`to_char(date_trunc('day', ${events.ts}), 'YYYY-MM-DD')`,
-      pageviews: count(events.id),
-      uniques: countDistinct(events.visitorHash),
-    })
-    .from(events)
-    .where(where)
-    .groupBy(sql`date_trunc('day', ${events.ts})`)
-    .orderBy(sql`date_trunc('day', ${events.ts}) ASC`);
+  const totals = totalsRows[0];
 
   return (
     <main className="px-6 py-10 max-w-5xl w-full mx-auto flex flex-col gap-10">
       <header className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold tracking-tight">
-            {site.name ?? site.domain}
+            <a
+              href={`https://${site.domain}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:underline inline-flex items-center gap-1.5"
+            >
+              {site.name ?? site.domain}
+              <ExternalLinkIcon />
+            </a>
           </h1>
           <RangeTabs current={range} />
         </div>
@@ -107,10 +118,7 @@ export default async function SitePage({ params, searchParams }: PageProps) {
       <section className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <Stat label="Pageviews" value={totals?.pageviews ?? 0} />
         <Stat label="Unique visitors" value={totals?.uniques ?? 0} />
-        <Stat
-          label="Days with data"
-          value={dailySeries.length}
-        />
+        <Stat label="Days with data" value={dailySeries.length} />
         <Stat
           label="Avg / day"
           value={
@@ -124,30 +132,37 @@ export default async function SitePage({ params, searchParams }: PageProps) {
       <DailyBars series={dailySeries} />
 
       <div className="grid sm:grid-cols-2 gap-6">
-        <Table
+        <BarTable
           title="Top pages"
-          headers={['Path', 'Views']}
-          rows={topPaths.map((r) => [r.path, r.pageviews])}
+          rows={topPaths.map((r) => ({ label: r.path, value: r.pageviews }))}
         />
-        <Table
+        <BarTable
           title="Top referrers"
-          headers={['Source', 'Views']}
-          rows={topReferrers.map((r) => [r.host ?? 'Direct', r.pageviews])}
+          rows={topReferrers.map((r) => ({
+            label: r.host ?? 'Direct',
+            value: r.pageviews,
+          }))}
         />
-        <Table
+        <BarTable
           title="Browsers"
-          headers={['Browser', 'Views']}
-          rows={topBrowsers.map((r) => [r.browser ?? 'Unknown', r.pageviews])}
+          rows={topBrowsers.map((r) => ({
+            label: r.browser ?? 'Unknown',
+            value: r.pageviews,
+          }))}
         />
-        <Table
+        <BarTable
           title="Countries"
-          headers={['Country', 'Views']}
-          rows={topCountries.map((r) => [r.country ?? 'Unknown', r.pageviews])}
+          rows={topCountries.map((r) => ({
+            label: r.country ?? 'Unknown',
+            value: r.pageviews,
+          }))}
         />
-        <Table
+        <BarTable
           title="Devices"
-          headers={['Device', 'Views']}
-          rows={topDevices.map((r) => [r.device ?? 'Unknown', r.pageviews])}
+          rows={topDevices.map((r) => ({
+            label: r.device ?? 'Unknown',
+            value: r.pageviews,
+          }))}
         />
       </div>
 
@@ -201,15 +216,14 @@ function RangeTabs({ current }: { current: Range }) {
   );
 }
 
-function Table({
+function BarTable({
   title,
-  headers,
   rows,
 }: {
   title: string;
-  headers: [string, string];
-  rows: [string, number][];
+  rows: { label: string; value: number }[];
 }) {
+  const max = rows.reduce((m, r) => Math.max(m, r.value), 0);
   return (
     <div className="flex flex-col gap-2">
       <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
@@ -218,26 +232,31 @@ function Table({
       {rows.length === 0 ? (
         <p className="text-sm text-zinc-500">No data yet.</p>
       ) : (
-        <div className="rounded-md border border-zinc-200 dark:border-zinc-800 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-zinc-50 dark:bg-zinc-900 text-zinc-500">
-              <tr>
-                <th className="text-left px-3 py-2 font-medium">{headers[0]}</th>
-                <th className="text-right px-3 py-2 font-medium">{headers[1]}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-              {rows.map(([label, value]) => (
-                <tr key={label}>
-                  <td className="px-3 py-2 truncate max-w-[16rem]">{label}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {value.toLocaleString()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ul className="rounded-md border border-zinc-200 dark:border-zinc-800 overflow-hidden divide-y divide-zinc-200 dark:divide-zinc-800">
+          {rows.map((r) => (
+            <li
+              key={r.label}
+              className="relative flex items-center justify-between px-3 py-2 text-sm"
+            >
+              <span
+                aria-hidden="true"
+                className="absolute left-0 top-0 bottom-0 bg-emerald-100 dark:bg-emerald-900/30 transition-all"
+                style={{
+                  width: `${max > 0 ? (r.value / max) * 100 : 0}%`,
+                }}
+              />
+              <span
+                className="relative truncate max-w-[14rem]"
+                title={r.label}
+              >
+                {r.label}
+              </span>
+              <span className="relative tabular-nums font-medium ml-3">
+                {r.value.toLocaleString()}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
@@ -260,7 +279,8 @@ function DailyBars({
       </section>
     );
   }
-  const max = Math.max(...series.map((s) => s.pageviews), 1);
+  const max = series.reduce((m, s) => Math.max(m, s.pageviews), 1);
+  const labelStride = Math.max(1, Math.ceil(series.length / 10));
   return (
     <section>
       <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500 mb-3">
@@ -270,19 +290,49 @@ function DailyBars({
         {series.map((s) => (
           <div
             key={s.day}
-            className="flex-1 flex flex-col items-center gap-1"
-            title={`${s.day}: ${s.pageviews} views, ${s.uniques} unique`}
+            className="flex-1 flex items-end h-full"
+            title={`${s.day}: ${s.pageviews.toLocaleString()} views, ${s.uniques.toLocaleString()} unique`}
           >
             <div
-              className="w-full bg-zinc-900 dark:bg-zinc-100 rounded-sm"
-              style={{ height: `${(s.pageviews / max) * 100}%` }}
+              className="w-full bg-emerald-500 dark:bg-emerald-400 rounded-sm hover:bg-emerald-600 dark:hover:bg-emerald-300"
+              style={{
+                height: `${Math.max((s.pageviews / max) * 100, s.pageviews > 0 ? 2 : 0)}%`,
+              }}
             />
-            <span className="text-[10px] text-zinc-500 rotate-45 origin-top-left h-4">
-              {s.day.slice(5)}
-            </span>
           </div>
         ))}
       </div>
+      <div className="flex gap-1 mt-2 text-[10px] text-zinc-500">
+        {series.map((s, i) => (
+          <span key={s.day} className="flex-1 text-center truncate">
+            {i % labelStride === 0 || i === series.length - 1
+              ? s.day.slice(5)
+              : ''}
+          </span>
+        ))}
+      </div>
     </section>
+  );
+}
+
+function ExternalLinkIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="text-zinc-400"
+      aria-hidden="true"
+    >
+      <path d="M15 3h6v6" />
+      <path d="M10 14 21 3" />
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+    </svg>
   );
 }
