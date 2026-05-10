@@ -56,32 +56,23 @@ export async function loadRange(
   const since = new Date(Date.now() - hours * 3_600_000);
   const where = and(eq(events.siteId, siteId), gte(events.ts, since));
 
-  const seriesQuery =
+  const tzLiteral = sql.raw(`'${tz.replace(/'/g, "''")}'`);
+  const truncExpr =
     bucket === 'hour'
-      ? db
-          .select({
-            bucket: sql<string>`to_char(date_trunc('hour', ${events.ts} AT TIME ZONE ${tz}), 'YYYY-MM-DD HH24:00')`,
-            pageviews: count(events.id),
-            uniques: countDistinct(events.visitorHash),
-          })
-          .from(events)
-          .where(where)
-          .groupBy(sql`date_trunc('hour', ${events.ts} AT TIME ZONE ${tz})`)
-          .orderBy(
-            sql`date_trunc('hour', ${events.ts} AT TIME ZONE ${tz}) ASC`,
-          )
-      : db
-          .select({
-            bucket: sql<string>`to_char(date_trunc('day', ${events.ts} AT TIME ZONE ${tz}), 'YYYY-MM-DD')`,
-            pageviews: count(events.id),
-            uniques: countDistinct(events.visitorHash),
-          })
-          .from(events)
-          .where(where)
-          .groupBy(sql`date_trunc('day', ${events.ts} AT TIME ZONE ${tz})`)
-          .orderBy(
-            sql`date_trunc('day', ${events.ts} AT TIME ZONE ${tz}) ASC`,
-          );
+      ? sql`date_trunc('hour', ${events.ts} AT TIME ZONE ${tzLiteral})`
+      : sql`date_trunc('day', ${events.ts} AT TIME ZONE ${tzLiteral})`;
+  const bucketFormat = bucket === 'hour' ? 'YYYY-MM-DD HH24:00' : 'YYYY-MM-DD';
+
+  const seriesQuery = db
+    .select({
+      bucket: sql<string>`to_char(${truncExpr}, ${bucketFormat})`,
+      pageviews: count(events.id),
+      uniques: countDistinct(events.visitorHash),
+    })
+    .from(events)
+    .where(where)
+    .groupBy(truncExpr)
+    .orderBy(sql`${truncExpr} ASC`);
 
   const [
     totalsRows,
