@@ -2,6 +2,8 @@
 
 A minimal, privacy-preserving, GDPR-compliant web analytics tool for simple web projects. Same category as Plausible, Umami, Fathom, GoatCounter — but personally owned and intentionally minimal.
 
+> **Status (2026-05-10):** the shipped v1 is a **single-user / Basic Auth** simplification of this plan, intended for tracking the author's own projects (scoil-scout, naionra-scout, etc.). The multi-tenant model below — sign-up, Clerk, Stripe billing — remains the longer-term direction but is not implemented. See `README.md` for what's actually deployed.
+
 ## 1. Vision & scope
 
 **In scope (v1):**

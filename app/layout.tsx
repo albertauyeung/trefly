@@ -1,7 +1,5 @@
 import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
-import { ClerkProvider } from '@clerk/nextjs';
-import { clerkPublishableKey } from '@/lib/clerk-env';
 import './globals.css';
 
 const geistSans = Geist({
@@ -17,22 +15,20 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: 'Trefly — minimal privacy-friendly analytics',
   description:
-    'GDPR-compliant, cookie-free web analytics for simple web projects.',
+    'GDPR-compliant, cookie-free web analytics for personal projects.',
 };
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <ClerkProvider publishableKey={clerkPublishableKey}>
-      <html
-        lang="en"
-        className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-      >
-        <body className="min-h-full flex flex-col bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
-          {children}
-        </body>
-      </html>
-    </ClerkProvider>
+    <html
+      lang="en"
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+    >
+      <body className="min-h-full flex flex-col bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
+        {children}
+      </body>
+    </html>
   );
 }
