@@ -3,6 +3,7 @@ import { Webhook } from 'svix';
 import { eq } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { users } from '@/db/schema';
+import { clerkWebhookSecret } from '@/lib/clerk-env';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,8 +32,7 @@ function pickEmail(data: ClerkUserData): string {
 }
 
 export async function POST(req: NextRequest) {
-  const secret = process.env.CLERK_WEBHOOK_SECRET;
-  if (!secret) {
+  if (!clerkWebhookSecret) {
     return NextResponse.json(
       { error: 'CLERK_WEBHOOK_SECRET not set' },
       { status: 500 },
@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
   const payload = await req.text();
   let event: ClerkEvent;
   try {
-    event = new Webhook(secret).verify(payload, {
+    event = new Webhook(clerkWebhookSecret).verify(payload, {
       'svix-id': svixId,
       'svix-timestamp': svixTimestamp,
       'svix-signature': svixSignature,

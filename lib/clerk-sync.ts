@@ -1,7 +1,10 @@
-import { clerkClient } from '@clerk/nextjs/server';
+import { createClerkClient } from '@clerk/nextjs/server';
 import { eq } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { users } from '@/db/schema';
+import { clerkSecretKey } from '@/lib/clerk-env';
+
+const clerk = createClerkClient({ secretKey: clerkSecretKey });
 
 export async function ensureUserRow(clerkUserId: string) {
   const existing = await db
@@ -11,8 +14,7 @@ export async function ensureUserRow(clerkUserId: string) {
     .limit(1);
   if (existing.length > 0) return existing[0];
 
-  const client = await clerkClient();
-  const clerkUser = await client.users.getUser(clerkUserId);
+  const clerkUser = await clerk.users.getUser(clerkUserId);
   const email =
     clerkUser.primaryEmailAddress?.emailAddress ??
     clerkUser.emailAddresses[0]?.emailAddress ??
