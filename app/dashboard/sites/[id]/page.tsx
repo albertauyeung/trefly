@@ -1,0 +1,296 @@
+import { notFound, redirect } from 'next/navigation';
+import { auth } from '@clerk/nextjs/server';
+import { and, count, countDistinct, desc, eq, gte, sql } from 'drizzle-orm';
+import { db } from '@/db/client';
+import { events, sites } from '@/db/schema';
+import { ensureUserRow } from '@/lib/clerk-sync';
+import { deleteSite } from '../../actions';
+import { Snippet } from './snippet';
+
+export const dynamic = 'force-dynamic';
+
+const RANGE_DAYS = { '7d': 7, '30d': 30, '90d': 90 } as const;
+type Range = keyof typeof RANGE_DAYS;
+
+interface PageProps {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ range?: string }>;
+}
+
+export default async function SitePage({ params, searchParams }: PageProps) {
+  const { id } = await params;
+  const { range: rangeRaw } = await searchParams;
+  const range: Range =
+    rangeRaw === '30d' || rangeRaw === '90d' ? rangeRaw : '7d';
+
+  const { userId: clerkUserId } = await auth();
+  if (!clerkUserId) redirect('/sign-in');
+
+  const user = await ensureUserRow(clerkUserId);
+  if (!user) notFound();
+
+  const [site] = await db
+    .select()
+    .from(sites)
+    .where(and(eq(sites.id, id), eq(sites.userId, user.id)))
+    .limit(1);
+  if (!site) notFound();
+
+  const since = new Date(Date.now() - RANGE_DAYS[range] * 86_400_000);
+  const where = and(eq(events.siteId, site.id), gte(events.ts, since));
+
+  const [totals] = await db
+    .select({
+      pageviews: count(events.id),
+      uniques: countDistinct(events.visitorHash),
+    })
+    .from(events)
+    .where(where);
+
+  const topPaths = await db
+    .select({ path: events.path, pageviews: count(events.id) })
+    .from(events)
+    .where(where)
+    .groupBy(events.path)
+    .orderBy(desc(count(events.id)))
+    .limit(10);
+
+  const topReferrers = await db
+    .select({
+      host: events.referrerHost,
+      pageviews: count(events.id),
+    })
+    .from(events)
+    .where(where)
+    .groupBy(events.referrerHost)
+    .orderBy(desc(count(events.id)))
+    .limit(10);
+
+  const topBrowsers = await db
+    .select({ browser: events.browser, pageviews: count(events.id) })
+    .from(events)
+    .where(where)
+    .groupBy(events.browser)
+    .orderBy(desc(count(events.id)))
+    .limit(8);
+
+  const topCountries = await db
+    .select({ country: events.country, pageviews: count(events.id) })
+    .from(events)
+    .where(where)
+    .groupBy(events.country)
+    .orderBy(desc(count(events.id)))
+    .limit(10);
+
+  const topDevices = await db
+    .select({ device: events.device, pageviews: count(events.id) })
+    .from(events)
+    .where(where)
+    .groupBy(events.device)
+    .orderBy(desc(count(events.id)));
+
+  const dailySeries = await db
+    .select({
+      day: sql<string>`to_char(date_trunc('day', ${events.ts}), 'YYYY-MM-DD')`,
+      pageviews: count(events.id),
+      uniques: countDistinct(events.visitorHash),
+    })
+    .from(events)
+    .where(where)
+    .groupBy(sql`date_trunc('day', ${events.ts})`)
+    .orderBy(sql`date_trunc('day', ${events.ts}) ASC`);
+
+  return (
+    <main className="px-6 py-10 max-w-5xl w-full mx-auto flex flex-col gap-10">
+      <header className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {site.name ?? site.domain}
+          </h1>
+          <RangeTabs current={range} />
+        </div>
+        <p className="text-sm text-zinc-500">{site.domain}</p>
+      </header>
+
+      <section className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <Stat label="Pageviews" value={totals?.pageviews ?? 0} />
+        <Stat label="Unique visitors" value={totals?.uniques ?? 0} />
+        <Stat
+          label="Days with data"
+          value={dailySeries.length}
+        />
+        <Stat
+          label="Avg / day"
+          value={
+            dailySeries.length === 0
+              ? 0
+              : Math.round((totals?.pageviews ?? 0) / dailySeries.length)
+          }
+        />
+      </section>
+
+      <DailyBars series={dailySeries} />
+
+      <div className="grid sm:grid-cols-2 gap-6">
+        <Table
+          title="Top pages"
+          headers={['Path', 'Views']}
+          rows={topPaths.map((r) => [r.path, r.pageviews])}
+        />
+        <Table
+          title="Top referrers"
+          headers={['Source', 'Views']}
+          rows={topReferrers.map((r) => [r.host ?? 'Direct', r.pageviews])}
+        />
+        <Table
+          title="Browsers"
+          headers={['Browser', 'Views']}
+          rows={topBrowsers.map((r) => [r.browser ?? 'Unknown', r.pageviews])}
+        />
+        <Table
+          title="Countries"
+          headers={['Country', 'Views']}
+          rows={topCountries.map((r) => [r.country ?? 'Unknown', r.pageviews])}
+        />
+        <Table
+          title="Devices"
+          headers={['Device', 'Views']}
+          rows={topDevices.map((r) => [r.device ?? 'Unknown', r.pageviews])}
+        />
+      </div>
+
+      <Snippet trackingId={site.trackingId} />
+
+      <section className="border-t border-zinc-200 dark:border-zinc-800 pt-6">
+        <form action={deleteSite}>
+          <input type="hidden" name="siteId" value={site.id} />
+          <button
+            type="submit"
+            className="text-sm text-red-600 hover:underline"
+          >
+            Delete this site (removes all collected events)
+          </button>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex flex-col gap-1 rounded-md border border-zinc-200 dark:border-zinc-800 px-4 py-3">
+      <span className="text-xs uppercase tracking-wide text-zinc-500">
+        {label}
+      </span>
+      <span className="text-2xl font-semibold">{value.toLocaleString()}</span>
+    </div>
+  );
+}
+
+function RangeTabs({ current }: { current: Range }) {
+  const ranges: Range[] = ['7d', '30d', '90d'];
+  return (
+    <nav className="flex gap-1 text-sm">
+      {ranges.map((r) => (
+        <a
+          key={r}
+          href={`?range=${r}`}
+          className={
+            'rounded-md px-3 py-1 ' +
+            (r === current
+              ? 'bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900'
+              : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800')
+          }
+        >
+          {r}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+function Table({
+  title,
+  headers,
+  rows,
+}: {
+  title: string;
+  headers: [string, string];
+  rows: [string, number][];
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
+        {title}
+      </h2>
+      {rows.length === 0 ? (
+        <p className="text-sm text-zinc-500">No data yet.</p>
+      ) : (
+        <div className="rounded-md border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-zinc-50 dark:bg-zinc-900 text-zinc-500">
+              <tr>
+                <th className="text-left px-3 py-2 font-medium">{headers[0]}</th>
+                <th className="text-right px-3 py-2 font-medium">{headers[1]}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+              {rows.map(([label, value]) => (
+                <tr key={label}>
+                  <td className="px-3 py-2 truncate max-w-[16rem]">{label}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {value.toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DailyBars({
+  series,
+}: {
+  series: { day: string; pageviews: number; uniques: number }[];
+}) {
+  if (series.length === 0) {
+    return (
+      <section>
+        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500 mb-2">
+          Daily pageviews
+        </h2>
+        <p className="text-sm text-zinc-500">
+          No data yet. Once events start flowing, daily totals will show up here.
+        </p>
+      </section>
+    );
+  }
+  const max = Math.max(...series.map((s) => s.pageviews), 1);
+  return (
+    <section>
+      <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500 mb-3">
+        Daily pageviews
+      </h2>
+      <div className="flex items-end gap-1 h-40">
+        {series.map((s) => (
+          <div
+            key={s.day}
+            className="flex-1 flex flex-col items-center gap-1"
+            title={`${s.day}: ${s.pageviews} views, ${s.uniques} unique`}
+          >
+            <div
+              className="w-full bg-zinc-900 dark:bg-zinc-100 rounded-sm"
+              style={{ height: `${(s.pageviews / max) * 100}%` }}
+            />
+            <span className="text-[10px] text-zinc-500 rotate-45 origin-top-left h-4">
+              {s.day.slice(5)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
