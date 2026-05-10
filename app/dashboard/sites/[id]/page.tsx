@@ -1,9 +1,7 @@
-import { notFound, redirect } from 'next/navigation';
-import { auth } from '@clerk/nextjs/server';
+import { notFound } from 'next/navigation';
 import { and, count, countDistinct, desc, eq, gte, sql } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { events, sites } from '@/db/schema';
-import { ensureUserRow } from '@/lib/clerk-sync';
 import { deleteSite } from '../../actions';
 import { Snippet } from './snippet';
 
@@ -23,16 +21,10 @@ export default async function SitePage({ params, searchParams }: PageProps) {
   const range: Range =
     rangeRaw === '30d' || rangeRaw === '90d' ? rangeRaw : '7d';
 
-  const { userId: clerkUserId } = await auth();
-  if (!clerkUserId) redirect('/sign-in');
-
-  const user = await ensureUserRow(clerkUserId);
-  if (!user) notFound();
-
   const [site] = await db
     .select()
     .from(sites)
-    .where(and(eq(sites.id, id), eq(sites.userId, user.id)))
+    .where(eq(sites.id, id))
     .limit(1);
   if (!site) notFound();
 

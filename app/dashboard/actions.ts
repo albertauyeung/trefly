@@ -2,11 +2,9 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { auth } from '@clerk/nextjs/server';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { sites } from '@/db/schema';
-import { ensureUserRow } from '@/lib/clerk-sync';
 import { newTrackingId } from '@/lib/tracking-id';
 
 const DOMAIN_RE = /^([a-z0-9-]+\.)+[a-z]{2,}$/i;
@@ -28,9 +26,6 @@ function normaliseDomain(raw: string): string | null {
 }
 
 export async function createSite(formData: FormData) {
-  const { userId: clerkUserId } = await auth();
-  if (!clerkUserId) redirect('/sign-in');
-
   const domainInput = formData.get('domain');
   const nameInput = formData.get('name');
   if (typeof domainInput !== 'string') return;
@@ -41,13 +36,9 @@ export async function createSite(formData: FormData) {
       ? nameInput.trim().slice(0, 80)
       : null;
 
-  const user = await ensureUserRow(clerkUserId);
-  if (!user) return;
-
   const [row] = await db
     .insert(sites)
     .values({
-      userId: user.id,
       domain,
       name,
       trackingId: newTrackingId(),
@@ -59,18 +50,10 @@ export async function createSite(formData: FormData) {
 }
 
 export async function deleteSite(formData: FormData) {
-  const { userId: clerkUserId } = await auth();
-  if (!clerkUserId) redirect('/sign-in');
-
   const siteId = formData.get('siteId');
   if (typeof siteId !== 'string') return;
 
-  const user = await ensureUserRow(clerkUserId);
-  if (!user) return;
-
-  await db
-    .delete(sites)
-    .where(and(eq(sites.id, siteId), eq(sites.userId, user.id)));
+  await db.delete(sites).where(eq(sites.id, siteId));
 
   revalidatePath('/dashboard');
   redirect('/dashboard');

@@ -1,38 +1,28 @@
 import Link from 'next/link';
-import { auth } from '@clerk/nextjs/server';
-import { redirect } from 'next/navigation';
-import { eq, desc } from 'drizzle-orm';
+import { desc } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { sites } from '@/db/schema';
-import { ensureUserRow } from '@/lib/clerk-sync';
 import { createSite } from './actions';
 
 export const dynamic = 'force-dynamic';
 
 export default async function DashboardPage() {
-  const { userId: clerkUserId } = await auth();
-  if (!clerkUserId) redirect('/sign-in');
-
-  const user = await ensureUserRow(clerkUserId);
-  const mySites = user
-    ? await db
-        .select()
-        .from(sites)
-        .where(eq(sites.userId, user.id))
-        .orderBy(desc(sites.createdAt))
-    : [];
+  const allSites = await db
+    .select()
+    .from(sites)
+    .orderBy(desc(sites.createdAt));
 
   return (
     <main className="px-6 py-10 max-w-3xl w-full mx-auto flex flex-col gap-10">
       <section className="flex flex-col gap-4">
         <h1 className="text-2xl font-semibold tracking-tight">Your sites</h1>
-        {mySites.length === 0 ? (
+        {allSites.length === 0 ? (
           <p className="text-zinc-600 dark:text-zinc-400">
-            You haven&apos;t added a site yet. Add one below to get started.
+            No sites yet. Add one below to get started.
           </p>
         ) : (
           <ul className="flex flex-col divide-y divide-zinc-200 dark:divide-zinc-800 border border-zinc-200 dark:border-zinc-800 rounded-md">
-            {mySites.map((site) => (
+            {allSites.map((site) => (
               <li key={site.id} className="px-4 py-3 flex items-center justify-between">
                 <div className="flex flex-col">
                   <span className="font-medium">{site.name ?? site.domain}</span>
@@ -52,10 +42,7 @@ export default async function DashboardPage() {
 
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-medium">Add a site</h2>
-        <form
-          action={createSite}
-          className="flex flex-col gap-3 max-w-md"
-        >
+        <form action={createSite} className="flex flex-col gap-3 max-w-md">
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-zinc-700 dark:text-zinc-300">Domain</span>
             <input
